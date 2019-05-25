@@ -10,6 +10,8 @@
 
 #include <ACAN2517.h>
 #include <SPI.h>
+#include "driver/ledc.h"
+#define LED_BUILTIN 12
 
 //——————————————————————————————————————————————————————————————————————————————
 //  For using SPI on ESP32, see demo sketch SPI_Multiple_Buses
@@ -28,24 +30,51 @@
 // See https://randomnerdtutorials.com/esp32-pinout-reference-gpios/
 //——————————————————————————————————————————————————————————————————————————————
 
-static const byte MCP2517_SCK  = 26 ; // SCK input of MCP2517
-static const byte MCP2517_MOSI = 19 ; // SDI input of MCP2517
-static const byte MCP2517_MISO = 18 ; // SDO output of MCP2517
+static const byte MCP2517_SCK  = 18 ; // SCK input of MCP2517
+static const byte MCP2517_MOSI = 23 ; // SDI input of MCP2517
+static const byte MCP2517_MISO = 19 ; // SDO output of MCP2517
 
-static const byte MCP2517_CS  = 16 ; // CS input of MCP2517
-static const byte MCP2517_INT = 32 ; // INT output of MCP2517
+// static const byte MCP2517_CS  = 5 ; // CS input of MCP2517
+// static const byte MCP2517_INT = 27 ; // INT output of MCP2517
+static const byte MCP2517_CS  = 32 ; // CS input of MCP2517
+static const byte MCP2517_INT = 36 ; // INT output of MCP2517
 
 //——————————————————————————————————————————————————————————————————————————————
 //  ACAN2517 Driver object
 //——————————————————————————————————————————————————————————————————————————————
 
 ACAN2517 can (MCP2517_CS, SPI, MCP2517_INT) ;
+ACAN2517 can2 (5, SPI, 27);
 
 //——————————————————————————————————————————————————————————————————————————————
 //   SETUP
 //——————————————————————————————————————————————————————————————————————————————
 
+void configure_MCP_oscillator(void)
+{
+    ledc_timer_config_t ledc_timer;
+    ledc_channel_config_t ledc_channel;
+
+    ledc_timer.duty_resolution = LEDC_TIMER_1_BIT; // resolution of PWM duty
+    ledc_timer.freq_hz = 40000000;                 // frequency of PWM signal
+    ledc_timer.speed_mode = LEDC_HIGH_SPEED_MODE;  // timer mode
+    ledc_timer.timer_num = LEDC_TIMER_0;           // timer index
+
+    ledc_channel.channel    = LEDC_CHANNEL_0;
+    ledc_channel.duty       = 0;
+    ledc_channel.gpio_num   = 0;
+    ledc_channel.speed_mode = ledc_timer.speed_mode;
+    ledc_channel.hpoint     = 0;
+    ledc_channel.timer_sel  = ledc_timer.timer_num;
+
+    // Set configuration of timer0 for high speed channels
+    ledc_timer_config(&ledc_timer);
+    ledc_channel_config(&ledc_channel);
+    ledc_set_duty(ledc_timer.speed_mode, ledc_channel.channel, 1);
+}
+
 void setup () {
+  configure_MCP_oscillator();
 //--- Switch on builtin led
   pinMode (LED_BUILTIN, OUTPUT) ;
   digitalWrite (LED_BUILTIN, HIGH) ;
@@ -63,10 +92,11 @@ void setup () {
   Serial.print (sizeof (ACAN2517Settings)) ;
   Serial.println (" bytes") ;
   Serial.println ("Configure ACAN2517") ;
-  ACAN2517Settings settings (ACAN2517Settings::OSC_4MHz10xPLL, 125 * 1000) ; // CAN bit rate 125 kb/s
+  ACAN2517Settings settings (ACAN2517Settings::OSC_40MHz, 500 * 1000) ; // CAN bit rate 125 kb/s
   settings.mRequestedMode = ACAN2517Settings::InternalLoopBack ; // Select loopback mode
   const uint32_t errorCode = can.begin (settings, [] { can.isr () ; }) ;
-  if (errorCode == 0) {
+  const uint32_t err2 = can2.begin( settings, [] {can2.isr() ; }) ;
+  if (errorCode == 0 && err2 == 0) {
     Serial.print ("Bit Rate prescaler: ") ;
     Serial.println (settings.mBitRatePrescaler) ;
     Serial.print ("Phase segment 1: ") ;
@@ -95,6 +125,7 @@ void setup () {
 
 static uint32_t gBlinkLedDate = 0 ;
 static uint32_t gReceivedFrameCount = 0 ;
+static uint32_t gReceivedFrameCount2 = 0 ;
 static uint32_t gSentFrameCount = 0 ;
 
 //——————————————————————————————————————————————————————————————————————————————
@@ -102,12 +133,13 @@ static uint32_t gSentFrameCount = 0 ;
 void loop () {
   CANMessage frame ;
   if (gBlinkLedDate < millis ()) {
-    gBlinkLedDate += 2000 ;
+    gBlinkLedDate += 1;
     digitalWrite (LED_BUILTIN, !digitalRead (LED_BUILTIN)) ;
     const bool ok = can.tryToSend (frame) ;
-    if (ok) {
+    const bool ok2 = can2.tryToSend (frame) ;
+    if (ok && ok2) {
       gSentFrameCount += 1 ;
-      Serial.print ("Sent: ") ;
+      Serial.print ("both Sent: ") ;
       Serial.println (gSentFrameCount) ;
     }else{
       Serial.println ("Send failure") ;
@@ -116,8 +148,14 @@ void loop () {
   if (can.available ()) {
     can.receive (frame) ;
     gReceivedFrameCount ++ ;
-    Serial.print ("Received: ") ;
+    Serial.print ("1 Received: ") ;
     Serial.println (gReceivedFrameCount) ;
+  }
+  if (can2.available ()) {
+    can2.receive (frame) ;
+    gReceivedFrameCount2 ++ ;
+    Serial.print ("2 Received: ") ;
+    Serial.println (gReceivedFrameCount2) ;
   }
 }
 
