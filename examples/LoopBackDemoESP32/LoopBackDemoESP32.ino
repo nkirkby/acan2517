@@ -93,7 +93,7 @@ void setup () {
   Serial.println (" bytes") ;
   Serial.println ("Configure ACAN2517") ;
   ACAN2517Settings settings (ACAN2517Settings::OSC_40MHz, 500 * 1000) ; // CAN bit rate 125 kb/s
-  settings.mRequestedMode = ACAN2517Settings::InternalLoopBack ; // Select loopback mode
+  settings.mRequestedMode = ACAN2517Settings::Normal20B;
   const uint32_t errorCode = can.begin (settings, [] { can.isr () ; }) ;
   const uint32_t err2 = can2.begin( settings, [] {can2.isr() ; }) ;
   if (errorCode == 0 && err2 == 0) {
@@ -117,6 +117,8 @@ void setup () {
     Serial.print ("Configuration error 0x") ;
     Serial.println (errorCode, HEX) ;
   }
+  pinMode(13, OUTPUT);
+  digitalWrite(13, LOW);
 }
 
 //——————————————————————————————————————————————————————————————————————————————
@@ -132,29 +134,35 @@ static uint32_t gSentFrameCount = 0 ;
 
 void loop () {
   CANMessage frame ;
+  frame.id = 0x001;
   if (gBlinkLedDate < millis ()) {
-    gBlinkLedDate += 1;
+    gBlinkLedDate += 1000;
     digitalWrite (LED_BUILTIN, !digitalRead (LED_BUILTIN)) ;
     const bool ok = can.tryToSend (frame) ;
     const bool ok2 = can2.tryToSend (frame) ;
+    // const bool ok2 = true;
     if (ok && ok2) {
       gSentFrameCount += 1 ;
-      Serial.print ("both Sent: ") ;
-      Serial.println (gSentFrameCount) ;
+      // Serial.print ("both Sent: ") ;
+      // Serial.println (gSentFrameCount) ;
     }else{
       Serial.println ("Send failure") ;
     }
+    Serial.printf("CAN1 Error Counters: 0x%x\n", can.readErrorCounters());
+    Serial.printf("CAN2 Error Counters: 0x%x\n", can.readErrorCounters());
   }
   if (can.available ()) {
     can.receive (frame) ;
     gReceivedFrameCount ++ ;
-    Serial.print ("1 Received: ") ;
+    if (frame.id == 0x001)
+    Serial.printf ("1 Received: frame of ID %x\n", frame.id) ; 
     Serial.println (gReceivedFrameCount) ;
   }
   if (can2.available ()) {
     can2.receive (frame) ;
     gReceivedFrameCount2 ++ ;
-    Serial.print ("2 Received: ") ;
+    if (frame.id == 0x001)
+    Serial.printf ("2 Received: frame of ID %x\n", frame.id) ;
     Serial.println (gReceivedFrameCount2) ;
   }
 }

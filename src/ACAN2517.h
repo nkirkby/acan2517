@@ -85,6 +85,10 @@ class ACAN2517 {
 
   public: uint32_t readErrorCounters (void) ;
 
+  public: void print_diagnostics(void);
+  public: uint32_t serrif_is_set(void);
+  public: bool concurrent_access;
+
 //······················································································································
 //    Private properties
 //······················································································································
@@ -139,6 +143,7 @@ class ACAN2517 {
   private: bool sendViaTXQ (const CANMessage & inMessage) ;
   private: bool enterInTransmitBuffer (const CANMessage & inMessage) ;
   private: void appendInControllerTxFIFO (const CANMessage & inMessage) ;
+  private: uint32_t requestNormalMode(void);
 
 //······················································································································
 //    Polling

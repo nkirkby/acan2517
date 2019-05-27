@@ -31,10 +31,14 @@
     ACAN2517 * canDriver = (ACAN2517 *) pData ;
     while (1) {
       xSemaphoreTake (canDriver->mISRSemaphore, portMAX_DELAY) ;
+      if (canDriver->concurrent_access)
+        Serial.printf("WARNING: concurrent access inside myESP32Task");
+      canDriver->concurrent_access = true;
       bool loop = true ;
       while (loop) {
         loop = canDriver->isr_core () ;
 	    }
+      canDriver->concurrent_access = false;
     }
   }
 #endif
@@ -156,7 +160,8 @@ mINT (inINT),
 mUsesTXQ (false),
 mControllerTxFIFOFull (false),
 mDriverReceiveBuffer (),
-mDriverTransmitBuffer ()
+mDriverTransmitBuffer (),
+concurrent_access(false)
 #ifdef ARDUINO_ARCH_ESP32
   , mISRSemaphore (xSemaphoreCreateCounting (10, 0))
 #endif
@@ -438,6 +443,24 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
   return errorCode ;
 }
 
+uint32_t ACAN2517::requestNormalMode(void)
+{
+  uint32_t errorCode = 0;
+  writeByteRegister (C1CON_REGISTER + 3, ACAN2517Settings::Normal20B);
+//----------------------------------- Wait (2 ms max) until requested mode is reached
+  bool wait = true ;
+  const uint32_t deadline = millis () + 2 ;
+  while (wait) {
+    const uint8_t actualMode = (readByteRegister (C1CON_REGISTER + 2) >> 5) & 0x07 ;
+    wait = actualMode != ACAN2517Settings::Normal20B;
+    if (wait && (millis () >= deadline)) {
+      errorCode |= kRequestedModeTimeOut ;
+      wait = false ;
+    }
+  }
+  return errorCode;
+}
+
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 //    SEND FRAME
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
@@ -448,12 +471,16 @@ bool ACAN2517::tryToSend (const CANMessage & inMessage) {
     noInterrupts () ;
   #endif
     mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside tryToSend");
+    concurrent_access = true;
       bool result = false ;
       if (inMessage.idx == 0) {
         result = enterInTransmitBuffer (inMessage) ;
       }else if (inMessage.idx == 255) {
         result = sendViaTXQ (inMessage) ;
       }
+    concurrent_access = false;
     mSPI.endTransaction () ;
   #if (defined (__MK64FX512__) || defined (__MK66FX1M0__))
     interrupts () ;
@@ -570,11 +597,15 @@ bool ACAN2517::sendViaTXQ (const CANMessage & inMessage) {
 bool ACAN2517::available (void) {
   #ifdef ARDUINO_ARCH_ESP32
     mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside available");
+    concurrent_access = true;
   #else
     noInterrupts () ;
   #endif
     const bool hasReceivedMessage = mDriverReceiveBuffer.count () > 0 ;
   #ifdef ARDUINO_ARCH_ESP32
+  concurrent_access = false;
     mSPI.endTransaction () ;
   #else
     interrupts () ;
@@ -587,6 +618,9 @@ bool ACAN2517::available (void) {
 bool ACAN2517::receive (CANMessage & outMessage) {
   #ifdef ARDUINO_ARCH_ESP32
     mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside receive");
+    concurrent_access = true;
   #else
     noInterrupts () ;
   #endif
@@ -595,6 +629,7 @@ bool ACAN2517::receive (CANMessage & outMessage) {
       writeByteRegisterSPI (C1FIFOCON_REGISTER (receiveFIFOIndex), 1) ;
     }
   #ifdef ARDUINO_ARCH_ESP32
+    concurrent_access = false;
     mSPI.endTransaction () ;
   #else
     interrupts () ;
@@ -630,6 +665,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::poll (void) {
+    Serial.println("Inside POLL");
     xSemaphoreGive (mISRSemaphore) ;
   }
 #endif
@@ -653,6 +689,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::isr (void) {
+    // Serial.println("Inside ISR");
     xSemaphoreGive (mISRSemaphore) ;
   }
 #endif
@@ -674,6 +711,9 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 bool ACAN2517::isr_core (void) {
   bool handled = false ;
   mSPI.beginTransaction (mSPISettings) ;
+  if (concurrent_access)
+    Serial.printf("WARNING: concurrent access inside isr_core");
+  concurrent_access = true;
   const uint32_t intReg = readRegisterSPI (C1INT_REGISTER) ; // DS20005688B, page 34
   if ((intReg & (1 << 1)) != 0) { // Receive FIFO interrupt
     receiveInterrupt () ;
@@ -691,7 +731,9 @@ bool ACAN2517::isr_core (void) {
   }
   if ((intReg & (1 << 12)) != 0) { // SERRIF interrupt
     writeByteRegisterSPI (C1INT_REGISTER + 1, 1 << 4) ;
+    // requestNormalMode();
   }
+  concurrent_access = false;
   mSPI.endTransaction () ;
   return handled ;
 }
@@ -880,7 +922,11 @@ uint8_t ACAN2517::readByteRegisterSPI (const uint16_t inRegisterAddress) {
 
 void ACAN2517::writeByteRegister (const uint16_t inRegisterAddress, const uint8_t inValue) {
   mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside writeByteRegister");
+    concurrent_access = true;
     writeByteRegisterSPI (inRegisterAddress, inValue) ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
 }
 
@@ -888,7 +934,11 @@ void ACAN2517::writeByteRegister (const uint16_t inRegisterAddress, const uint8_
 
 uint8_t ACAN2517::readByteRegister (const uint16_t inRegisterAddress) {
   mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside readByteRegister");
+    concurrent_access = true;
     const uint8_t result = readByteRegisterSPI (inRegisterAddress) ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
   return result ;
 }
@@ -897,7 +947,11 @@ uint8_t ACAN2517::readByteRegister (const uint16_t inRegisterAddress) {
 
 void ACAN2517::writeRegister (const uint16_t inRegisterAddress, const uint32_t inValue) {
   mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside writeRegister");
+    concurrent_access = true;
     writeRegisterSPI (inRegisterAddress, inValue) ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
 }
 
@@ -905,7 +959,11 @@ void ACAN2517::writeRegister (const uint16_t inRegisterAddress, const uint32_t i
 
 uint32_t ACAN2517::readRegister (const uint16_t inRegisterAddress) {
   mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside readRegister");
+    concurrent_access = true;
     const uint32_t result = readRegisterSPI (inRegisterAddress) ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
   return result ;
 }
@@ -914,7 +972,11 @@ uint32_t ACAN2517::readRegister (const uint16_t inRegisterAddress) {
 
 uint32_t ACAN2517::readErrorCounters (void) {
   mSPI.beginTransaction (mSPISettings) ;
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside readErrorCounters");
+    concurrent_access = true;
     const uint32_t result = readRegisterSPI (C1BDIAG0_REGISTER) ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
   return result ;
 }
@@ -923,11 +985,86 @@ uint32_t ACAN2517::readErrorCounters (void) {
 
 void ACAN2517::reset2517FD (void) {
   mSPI.beginTransaction (mSPISettings) ; // Check RESET is performed with 1 MHz clock
+    if (concurrent_access)
+      Serial.printf("WARNING: concurrent access inside reset2517FD");
+    concurrent_access = true;
     assertCS () ;
       mSPI.transfer16 (0x00) ; // Reset instruction: 0x0000
     deassertCS () ;
+    concurrent_access = false;
   mSPI.endTransaction () ;
 }
 
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
+#define MASK(n_bits) (0xFFFFFFFF >> (32 - n_bits))
+#define SELECT(reg, n_bits, start) ((reg >> start) & (MASK(n_bits)))
+
+void ACAN2517::print_diagnostics(void)
+{
+  const uint32_t cicon = readRegister(C1CON_REGISTER);
+  Serial.println("CiCON:");
+  Serial.printf("\tTransmit bandwidth sharing:      0x%x\n", SELECT(cicon, 4, 28));
+  Serial.printf("\tAbort all pending transmissions: 0x%x\n", SELECT(cicon, 1, 27));
+  Serial.printf("\tRequest operation mode:          0x%x\n", SELECT(cicon, 3, 24));
+  Serial.printf("\tOperation mode status:           0x%x\n", SELECT(cicon, 3, 21));
+  Serial.printf("\tEnable TX Queue:                 0x%x\n", SELECT(cicon, 1, 20));
+  Serial.printf("\tStore transmitted messages:      0x%x\n", SELECT(cicon, 1, 19));
+  Serial.printf("\tlisten-only on error:            0x%x\n", SELECT(cicon, 1, 18));
+  Serial.printf("\tTransmit ESI in gateway mode:    0x%x\n", SELECT(cicon, 1, 17));
+  Serial.printf("\tRestrict retransmissions:        0x%x\n", SELECT(cicon, 1, 16));
+  Serial.printf("\tBit rate switching disable:      0x%x\n", SELECT(cicon, 1, 12));
+  Serial.printf("\tCAN module is RXing or TXing:    0x%x\n", SELECT(cicon, 1, 11));
+  Serial.printf("\tWake up filter time:             0x%x\n", SELECT(cicon, 2, 9));
+  Serial.printf("\tUse CANbus line filter for wake: 0x%x\n", SELECT(cicon, 1, 8));
+  Serial.printf("\tPXEDIS:                          0x%x\n", SELECT(cicon, 1, 6));
+  Serial.printf("\tInclude stuff bit count in CRC:  0x%x\n", SELECT(cicon, 1, 5));
+  Serial.printf("\tDNCNT:                           0x%x\n", SELECT(cicon, 4, 0));
+  const uint32_t cibdiag1 = readRegister(C1BDIAG1_REGISTER);
+  Serial.println("CiBDIAG1: Bus Diagnostics Register 1");
+  Serial.printf("\tDLC mismatch:                    0x%x\n", SELECT(cibdiag1, 1, 31));
+  Serial.printf("\tESI:                             0x%x\n", SELECT(cibdiag1, 1, 30));
+  Serial.printf("\tCRC incorrect:                   0x%x\n", SELECT(cibdiag1, 1, 29));
+  Serial.printf("\tStuff error:                     0x%x\n", SELECT(cibdiag1, 1, 28));
+  Serial.printf("\tForm error:                      0x%x\n", SELECT(cibdiag1, 1, 27));
+  Serial.printf("\tBit 1 error:                     0x%x\n", SELECT(cibdiag1, 1, 25));
+  Serial.printf("\tBit 0 error:                     0x%x\n", SELECT(cibdiag1, 1, 24));
+  Serial.printf("\tBus off error:                   0x%x\n", SELECT(cibdiag1, 1, 23));
+  Serial.printf("\tCRC incorrect:                   0x%x\n", SELECT(cibdiag1, 1, 21));
+  Serial.printf("\tStuff error:                     0x%x\n", SELECT(cibdiag1, 1, 20));
+  Serial.printf("\tForm error:                      0x%x\n", SELECT(cibdiag1, 1, 19));
+  Serial.printf("\tBit 1 error:                     0x%x\n", SELECT(cibdiag1, 1, 18));
+  Serial.printf("\tBit 0 error:                     0x%x\n", SELECT(cibdiag1, 1, 17));
+  Serial.printf("\tBus off error:                   0x%x\n", SELECT(cibdiag1, 1, 16));
+  Serial.printf("\tMessages since last error:       %d\n",   SELECT(cibdiag1, 16, 0));
+  const uint32_t citxqsta = readRegister(C1TXQSTA_REGISTER);
+  Serial.println("CiTXQSTA: Transmit Queue Status Register");
+  Serial.printf("\tTransmit queue message index:    %d\n",   SELECT(citxqsta, 4, 8));
+  Serial.printf("\tMessage aborted status:          0x%x\n", SELECT(citxqsta, 1, 7));
+  Serial.printf("\tMessage lost arbitration:        0x%x\n", SELECT(citxqsta, 1, 6));
+  Serial.printf("\tErr detected during TX:          0x%x\n", SELECT(citxqsta, 1, 5));
+  Serial.printf("\tTX attempts usedup int pending:  0x%x\n", SELECT(citxqsta, 1, 4));
+  Serial.printf("\tTX queue empty interrupt flag:   0x%x\n", SELECT(citxqsta, 1, 2));
+  Serial.printf("\tTX queue notfull interrupt flag: 0x%x\n", SELECT(citxqsta, 1, 0));
+  const uint32_t ciint = readRegister(C1INT_REGISTER);
+  Serial.println("CiINT: Interrupt Register");
+  Serial.printf("\tInvalid message:          EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 31), SELECT(ciint, 1, 15));
+  Serial.printf("\tBus Wake Up:              EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 30), SELECT(ciint, 1, 14));
+  Serial.printf("\tCAN Bus Error:            EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 29), SELECT(ciint, 1, 13));
+  Serial.printf("\tSystem Error:             EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 28), SELECT(ciint, 1, 12));
+  Serial.printf("\tRX FIFO Overflow:         EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 27), SELECT(ciint, 1, 11));
+  Serial.printf("\tTX attempt:               EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 26), SELECT(ciint, 1, 10));
+  Serial.printf("\tSPI CRC error:            EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 25), SELECT(ciint, 1, 9));
+  Serial.printf("\tECC error:                EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 24), SELECT(ciint, 1, 8));
+  Serial.printf("\tTransmit Event FIFO:      EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 20), SELECT(ciint, 1, 4));
+  Serial.printf("\tMode Change:              EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 19), SELECT(ciint, 1, 3));
+  Serial.printf("\tTime base counter:        EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 18), SELECT(ciint, 1, 2));
+  Serial.printf("\tReceive FIFO interrupt:   EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 17), SELECT(ciint, 1, 1));
+  Serial.printf("\tTransmit FIFO interrupt:  EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 16), SELECT(ciint, 1, 0));
+}
+
+uint32_t ACAN2517::serrif_is_set()
+{
+  const uint32_t ciint = readRegister(C1INT_REGISTER);
+  return SELECT(ciint, 1, 12);
+}
