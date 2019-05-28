@@ -166,6 +166,8 @@ class ACAN2517 {
   private: ACAN2517 & operator = (const ACAN2517 &) ;
 
 //······················································································································
+  public: void print_diagnostics(void);
+  public: uint32_t serrif_is_set(void);
 
 } ;
 
