@@ -31,10 +31,12 @@
     ACAN2517 * canDriver = (ACAN2517 *) pData ;
     while (1) {
       xSemaphoreTake (canDriver->mISRSemaphore, portMAX_DELAY) ;
-      bool loop = true ;
-      while (loop) {
-        loop = canDriver->isr_core () ;
-	    }
+      {
+        bool loop = true ;
+        while (loop) {
+          loop = canDriver->isr_core () ;
+        }
+      }
     }
   }
 #endif
@@ -156,9 +158,12 @@ mINT (inINT),
 mUsesTXQ (false),
 mControllerTxFIFOFull (false),
 mDriverReceiveBuffer (),
-mDriverTransmitBuffer ()
+mDriverTransmitBuffer (),
+call_count(0)
 #ifdef ARDUINO_ARCH_ESP32
-  , mISRSemaphore (xSemaphoreCreateCounting (10, 0))
+  // , mISRSemaphore (xSemaphoreCreateBinary())
+  , mISRSemaphore (xSemaphoreCreateCounting(10, 0))
+  , xTaskToNotify (NULL)
 #endif
 {
 }
@@ -512,9 +517,11 @@ void ACAN2517::appendInControllerTxFIFO (const CANMessage & inMessage) {
     buff [10 + i] = inMessage.data [i] ;
   }
 //--- Send via SPI
+  // mSPI.beginTransaction (mSPISettings) ;
   assertCS () ;
     mSPI.transfer (buff, 18) ;
   deassertCS () ;
+  // mSPI.endTransaction() ;
 //--- Increment FIFO, send message (see DS20005688B, page 48)
   const uint8_t d = (1 << 0) | (1 << 1) ; // Set UINC bit, TXREQ bit
   writeByteRegisterSPI (C1FIFOCON_REGISTER (2) + 1, d);
@@ -630,6 +637,10 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::poll (void) {
+    // static BaseType_t xHigherPriorityTaskWoken;
+    // xHigherPriorityTaskWoken = pdFALSE ;
+    // xSemaphoreGiveFromISR (mISRSemaphore, &xHigherPriorityTaskWoken) ;
+    // portYIELD_FROM_ISR();
     xSemaphoreGive (mISRSemaphore) ;
   }
 #endif
@@ -652,8 +663,11 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 #ifdef ARDUINO_ARCH_ESP32
-  void ACAN2517::isr (void) {
-    xSemaphoreGive (mISRSemaphore) ;
+// Use IRAM_ATTR per: https://github.com/espressif/arduino-esp32/issues/855
+  void IRAM_ATTR ACAN2517::isr (void) {  
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
+    xSemaphoreGiveFromISR (mISRSemaphore, &xHigherPriorityTaskWoken) ;
+    portYIELD_FROM_ISR () ;
   }
 #endif
 
@@ -672,24 +686,28 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 bool ACAN2517::isr_core (void) {
+  has_handled = 1;
   bool handled = false ;
   mSPI.beginTransaction (mSPISettings) ;
   const uint32_t intReg = readRegisterSPI (C1INT_REGISTER) ; // DS20005688B, page 34
-  if ((intReg & (1 << 1)) != 0) { // Receive FIFO interrupt
+  if ((intReg & (1 << 1)) != 0) { // Receive FIFO interrupt flag
     receiveInterrupt () ;
     handled = true ;
   }
-  if ((intReg & (1 << 0)) != 0) { // Transmit FIFO interrupt
+  if ((intReg & (1 << 0)) != 0) { // Transmit FIFO interrupt flag
     transmitInterrupt () ;
     handled = true ;
   }
-  if ((intReg & (1 << 2)) != 0) { // TBCIF interrupt
+  if ((intReg & (1 << 2)) != 0) { // TBCIF interrupt flag
     writeByteRegisterSPI (C1INT_REGISTER, 1 << 2) ;
   }
-  if ((intReg & (1 << 3)) != 0) { // MODIF interrupt
+  if ((intReg & (1 << 3)) != 0) { // MODIF interrupt flag
     writeByteRegisterSPI (C1INT_REGISTER, 1 << 3) ;
   }
-  if ((intReg & (1 << 12)) != 0) { // SERRIF interrupt
+  if ((intReg & (1 << 12)) != 0) { // SERRIF interrupt flag
+    writeByteRegisterSPI (C1INT_REGISTER + 1, 1 << 4) ;
+  }
+  if ((intReg & (1 << 13)) != 0) { // CERRIF interrupt flag
     writeByteRegisterSPI (C1INT_REGISTER + 1, 1 << 4) ;
   }
   mSPI.endTransaction () ;
@@ -698,6 +716,7 @@ bool ACAN2517::isr_core (void) {
 
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
+//protected
 void ACAN2517::transmitInterrupt (void) {
   CANMessage message ;
   mDriverTransmitBuffer.remove (message) ;
@@ -711,7 +730,7 @@ void ACAN2517::transmitInterrupt (void) {
 }
 
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-
+//protected
 void ACAN2517::receiveInterrupt (void) {
   readByteRegisterSPI (C1FIFOSTA_REGISTER (receiveFIFOIndex)) ;
 //--- Use a 18-byte buffer for getting data (speed enhancement, thanks to thomasfla)
@@ -801,8 +820,8 @@ void ACAN2517::receiveInterrupt (void) {
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 void ACAN2517::assertCS (void) {
-  gpio_intr_disable((gpio_num_t)27);
-  gpio_intr_disable((gpio_num_t)36);
+  // gpio_intr_disable((gpio_num_t)27);
+  // gpio_intr_disable((gpio_num_t)36);
   digitalWrite (mCS, LOW) ;
 }
 
@@ -810,12 +829,13 @@ void ACAN2517::assertCS (void) {
 
 void ACAN2517::deassertCS (void) {
   digitalWrite (mCS, HIGH) ;
-  gpio_intr_enable((gpio_num_t)27);
-  gpio_intr_enable((gpio_num_t)36);
+  // gpio_intr_enable((gpio_num_t)27);
+  // gpio_intr_enable((gpio_num_t)36);
 }
 
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
+// protected
 void ACAN2517::writeRegisterSPI (const uint16_t inRegisterAddress, const uint32_t inValue) {
 //--- Write word register via 6-byte buffer (speed enhancement, thanks to thomasfla)
   uint8_t buff[6] = {0} ;
@@ -941,6 +961,9 @@ void ACAN2517::reset2517FD (void) {
 void ACAN2517::print_diagnostics(void)
 {
   const uint32_t cicon = readRegister(C1CON_REGISTER);
+  const uint32_t cibdiag1 = readRegister(C1BDIAG1_REGISTER);
+  const uint32_t ciint = readRegister(C1INT_REGISTER);
+  const uint32_t citxqsta = readRegister(C1TXQSTA_REGISTER);
   Serial.println("CiCON:");
   Serial.printf("\tTransmit bandwidth sharing:      0x%x\n", SELECT(cicon, 4, 28));
   Serial.printf("\tAbort all pending transmissions: 0x%x\n", SELECT(cicon, 1, 27));
@@ -958,7 +981,6 @@ void ACAN2517::print_diagnostics(void)
   Serial.printf("\tPXEDIS:                          0x%x\n", SELECT(cicon, 1, 6));
   Serial.printf("\tInclude stuff bit count in CRC:  0x%x\n", SELECT(cicon, 1, 5));
   Serial.printf("\tDNCNT:                           0x%x\n", SELECT(cicon, 4, 0));
-  const uint32_t cibdiag1 = readRegister(C1BDIAG1_REGISTER);
   Serial.println("CiBDIAG1: Bus Diagnostics Register 1");
   Serial.printf("\tDLC mismatch:                    0x%x\n", SELECT(cibdiag1, 1, 31));
   Serial.printf("\tESI:                             0x%x\n", SELECT(cibdiag1, 1, 30));
@@ -975,7 +997,6 @@ void ACAN2517::print_diagnostics(void)
   Serial.printf("\tBit 0 error:                     0x%x\n", SELECT(cibdiag1, 1, 17));
   Serial.printf("\tBus off error:                   0x%x\n", SELECT(cibdiag1, 1, 16));
   Serial.printf("\tMessages since last error:       %d\n",   SELECT(cibdiag1, 16, 0));
-  const uint32_t citxqsta = readRegister(C1TXQSTA_REGISTER);
   Serial.println("CiTXQSTA: Transmit Queue Status Register");
   Serial.printf("\tTransmit queue message index:    %d\n",   SELECT(citxqsta, 4, 8));
   Serial.printf("\tMessage aborted status:          0x%x\n", SELECT(citxqsta, 1, 7));
@@ -984,7 +1005,6 @@ void ACAN2517::print_diagnostics(void)
   Serial.printf("\tTX attempts usedup int pending:  0x%x\n", SELECT(citxqsta, 1, 4));
   Serial.printf("\tTX queue empty interrupt flag:   0x%x\n", SELECT(citxqsta, 1, 2));
   Serial.printf("\tTX queue notfull interrupt flag: 0x%x\n", SELECT(citxqsta, 1, 0));
-  const uint32_t ciint = readRegister(C1INT_REGISTER);
   Serial.println("CiINT: Interrupt Register");
   Serial.printf("\tInvalid message:          EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 31), SELECT(ciint, 1, 15));
   Serial.printf("\tBus Wake Up:              EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 30), SELECT(ciint, 1, 14));
@@ -1011,4 +1031,10 @@ uint32_t ACAN2517::serrif_is_set()
 {
   const uint32_t ciint = readRegister(C1INT_REGISTER);
   return SELECT(ciint, 1, 12);
+}
+
+uint32_t ACAN2517::has_CAN_BUS_error()
+{
+  const uint32_t ciint = readRegister(C1INT_REGISTER);
+  return SELECT(ciint, 1, 13);
 }

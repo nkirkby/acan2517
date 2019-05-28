@@ -92,7 +92,8 @@ class ACAN2517 {
   private: SPISettings mSPISettings ;
   private: SPIClass & mSPI ;
   private: uint8_t mCS ;
-  private: uint8_t mINT ;
+  public: uint8_t mINT ;
+  public: uint8_t call_count;
   private: bool mUsesTXQ ;
   private: bool mControllerTxFIFOFull ;
 
@@ -156,6 +157,7 @@ class ACAN2517 {
   private: void transmitInterrupt (void) ;
   #ifdef ARDUINO_ARCH_ESP32
     public: SemaphoreHandle_t mISRSemaphore ;
+    public: TaskHandle_t xTaskToNotify;
   #endif
 
 //······················································································································
@@ -169,6 +171,8 @@ class ACAN2517 {
   public: void print_diagnostics(void);
   public: uint32_t serrif_is_set(void);
   public: uint32_t get_operation_mode_status(void);
+  public: uint32_t has_CAN_BUS_error(void);
+  public: uint32_t has_handled;
 
 } ;
 
