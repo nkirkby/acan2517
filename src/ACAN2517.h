@@ -168,6 +168,7 @@ class ACAN2517 {
 //······················································································································
   public: void print_diagnostics(void);
   public: uint32_t serrif_is_set(void);
+  public: uint32_t get_operation_mode_status(void);
 
 } ;
 

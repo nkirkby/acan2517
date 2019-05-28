@@ -43,7 +43,8 @@ class ACAN2517Settings {
     InternalLoopBack = 2,
     ExternalLoopBack = 5,
     ListenOnly = 3,
-    Normal20B = 6
+    Normal20B = 6,
+    RestrictedOperation = 7
   } RequestedMode ;
 
   public: typedef enum : uint8_t {

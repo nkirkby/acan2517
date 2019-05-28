@@ -801,6 +801,8 @@ void ACAN2517::receiveInterrupt (void) {
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
 
 void ACAN2517::assertCS (void) {
+  gpio_intr_disable((gpio_num_t)27);
+  gpio_intr_disable((gpio_num_t)36);
   digitalWrite (mCS, LOW) ;
 }
 
@@ -808,6 +810,8 @@ void ACAN2517::assertCS (void) {
 
 void ACAN2517::deassertCS (void) {
   digitalWrite (mCS, HIGH) ;
+  gpio_intr_enable((gpio_num_t)27);
+  gpio_intr_enable((gpio_num_t)36);
 }
 
 //——————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
@@ -997,7 +1001,11 @@ void ACAN2517::print_diagnostics(void)
   Serial.printf("\tTransmit FIFO interrupt:  EN:%d ACTIVE:%d\n", SELECT(ciint, 1, 16), SELECT(ciint, 1, 0));
 }
 
-
+uint32_t ACAN2517::get_operation_mode_status()
+{
+  const uint32_t cicon = readRegister(C1CON_REGISTER);
+  return SELECT(cicon, 3, 21);
+}
 
 uint32_t ACAN2517::serrif_is_set()
 {
