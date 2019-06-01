@@ -150,12 +150,12 @@ class ACAN2517 {
 //    Interrupt service routine
 //······················································································································
 
-  public: void isr (void) ;
+  public: void IRAM_ATTR isr (void) ;
   public: bool isr_core (void) ;
   private: void receiveInterrupt (void) ;
   private: void transmitInterrupt (void) ;
   #ifdef ARDUINO_ARCH_ESP32
-    public: SemaphoreHandle_t mISRSemaphore ;
+    // public: SemaphoreHandle_t mISRSemaphore ;
   #endif
 
 //······················································································································

@@ -40,17 +40,26 @@
 //
 //----------------------------------------------------------------------------------------------------------------------
 
-// #error "derp"
+
+// Global ISR semaphore
+SemaphoreHandle_t gISRSemaphore  = xSemaphoreCreateCounting (10, 0);
+
+#define MAX_N_DRIVERS 2
+ACAN2517 *g_canDrivers[MAX_N_DRIVERS] = {NULL, NULL};
+int g_drivercount = 0;
 
 #ifdef ARDUINO_ARCH_ESP32
   static void myESP32Task (void * pData) {
-    ACAN2517 * canDriver = (ACAN2517 *) pData ;
     while (1) {
-      xSemaphoreTake (canDriver->mISRSemaphore, portMAX_DELAY) ;
-      bool loop = true ;
-      while (loop) {
-        loop = canDriver->isr_core () ;
-	    }
+      xSemaphoreTake (gISRSemaphore, portMAX_DELAY) ;
+      for (int which = 0; which < g_drivercount; which++)
+      {
+          ACAN2517 * canDriver = g_canDrivers[which];
+          bool loop = true ;
+          while (loop) {
+            loop = canDriver->isr_core () ;
+          }
+      }
     }
   }
 #endif
@@ -174,7 +183,6 @@ mControllerTxFIFOFull (false),
 mDriverReceiveBuffer (),
 mDriverTransmitBuffer ()
 #ifdef ARDUINO_ARCH_ESP32
-  , mISRSemaphore (xSemaphoreCreateCounting (10, 0))
 #endif
 {
 }
@@ -195,6 +203,8 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
 uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
                           void (* inInterruptServiceRoutine) (void),
                           const ACAN2517Filters & inFilters) {
+  Serial.printf("adding %p to g_canDrivers\n", this);
+  g_canDrivers[g_drivercount++] = this;
   uint32_t errorCode = 0 ; // Means no error
 //----------------------------------- If ok, check if settings are correct
   if (!inSettings.mBitRateClosedToDesiredRate) {
@@ -439,7 +449,11 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
       }
     }
     #ifdef ARDUINO_ARCH_ESP32
-      xTaskCreate (myESP32Task, "ACAN2517Handler", 1024, this, 256, NULL) ;
+    if (g_drivercount == 1) // Only make one of these tasks ever
+    {
+      Serial.println("Creating ACAN task");
+      xTaskCreatePinnedToCore (myESP32Task, "ACAN2517Handler", 1024, this, 24, NULL, 1) ;
+    }
     #endif
     if (mINT != 255) { // 255 means interrupt is not used
       #ifdef ARDUINO_ARCH_ESP32
@@ -654,7 +668,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::poll (void) {
-    xSemaphoreGive (mISRSemaphore) ;
+    xSemaphoreGive (gISRSemaphore) ;
   }
 #endif
 
@@ -678,7 +692,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::isr (void) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
-    xSemaphoreGiveFromISR (mISRSemaphore, &xHigherPriorityTaskWoken) ;
+    xSemaphoreGiveFromISR (gISRSemaphore, &xHigherPriorityTaskWoken) ;
     portYIELD_FROM_ISR () ;
   }
 #endif
@@ -688,7 +702,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 //----------------------------------------------------------------------------------------------------------------------
 
 #ifndef ARDUINO_ARCH_ESP32
-  void ACAN2517::isr (void) {
+  void IRAM_ATTR ACAN2517::isr (void) {
     isr_core () ;
   }
 #endif
