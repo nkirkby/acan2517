@@ -98,6 +98,7 @@ class ACAN2517 {
   private: uint8_t mINT ;
   private: bool mUsesTXQ ;
   private: bool mControllerTxFIFOFull ;
+  private: TaskHandle_t mISRHandlingTask;
 
 //······················································································································
 //    Receive buffer
