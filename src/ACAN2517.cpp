@@ -46,7 +46,7 @@ SemaphoreHandle_t gISRSemaphore  = xSemaphoreCreateCounting (10, 0);
 
 #define MAX_N_DRIVERS 2
 ACAN2517 *g_canDrivers[MAX_N_DRIVERS] = {NULL, NULL};
-int g_drivercount = 0;
+extern int g_drivercount = 0;
 
 #ifdef ARDUINO_ARCH_ESP32
   static void myESP32Task (void * pData) {
@@ -203,7 +203,7 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
 uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
                           void (* inInterruptServiceRoutine) (void),
                           const ACAN2517Filters & inFilters) {
-  Serial.printf("adding %p to g_canDrivers\n", this);
+  Serial.printf("adding %p to g_canDrivers at count %d\n", this, g_drivercount);
   g_canDrivers[g_drivercount++] = this;
   uint32_t errorCode = 0 ; // Means no error
 //----------------------------------- If ok, check if settings are correct
@@ -261,6 +261,9 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
   if (inFilters.filterStatus () != ACAN2517Filters::kFiltersOk) {
     errorCode |= kFilterDefinitionError ;
   }
+      #ifdef ARDUINO_ARCH_ESP32
+        taskDISABLE_INTERRUPTS () ;
+      #endif
 //----------------------------------- CS and INT pins
   if (errorCode == 0) {
     if (mINT != 255) { // 255 means interrupt is not used
@@ -464,6 +467,9 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
       #endif
     }
   }
+      #ifdef ARDUINO_ARCH_ESP32
+        taskENABLE_INTERRUPTS () ;
+      #endif
 //---
   return errorCode ;
 }
@@ -477,20 +483,20 @@ bool ACAN2517::tryToSend (const CANMessage & inMessage) {
   #if (defined (__MK64FX512__) || defined (__MK66FX1M0__))
     noInterrupts () ;
   #endif
-    mSPI.beginTransaction (mSPISettings) ;
       #ifdef ARDUINO_ARCH_ESP32
         taskDISABLE_INTERRUPTS () ;
       #endif
+    mSPI.beginTransaction (mSPISettings) ;
         bool result = false ;
         if (inMessage.idx == 0) {
           result = enterInTransmitBuffer (inMessage) ;
         }else if (inMessage.idx == 255) {
           result = sendViaTXQ (inMessage) ;
         }
+    mSPI.endTransaction () ;
       #ifdef ARDUINO_ARCH_ESP32
         taskENABLE_INTERRUPTS () ;
       #endif
-    mSPI.endTransaction () ;
   #if (defined (__MK64FX512__) || defined (__MK66FX1M0__))
     interrupts () ;
   #endif
@@ -605,6 +611,7 @@ bool ACAN2517::sendViaTXQ (const CANMessage & inMessage) {
 
 bool ACAN2517::available (void) {
   #ifdef ARDUINO_ARCH_ESP32
+    taskDISABLE_INTERRUPTS () ;
     mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
   #else
     noInterrupts () ;
@@ -612,6 +619,7 @@ bool ACAN2517::available (void) {
     const bool hasReceivedMessage = mDriverReceiveBuffer.count () > 0 ;
   #ifdef ARDUINO_ARCH_ESP32
     mSPI.endTransaction () ;
+    taskENABLE_INTERRUPTS () ;
   #else
     interrupts () ;
   #endif
@@ -622,8 +630,8 @@ bool ACAN2517::available (void) {
 
 bool ACAN2517::receive (CANMessage & outMessage) {
   #ifdef ARDUINO_ARCH_ESP32
-    mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
     taskDISABLE_INTERRUPTS () ;
+    mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
   #else
     noInterrupts () ;
   #endif
@@ -632,8 +640,8 @@ bool ACAN2517::receive (CANMessage & outMessage) {
       writeByteRegisterSPI (C1FIFOCON_REGISTER (receiveFIFOIndex), 1) ;
     }
   #ifdef ARDUINO_ARCH_ESP32
-    taskENABLE_INTERRUPTS () ;
     mSPI.endTransaction () ;
+    taskENABLE_INTERRUPTS () ;
   #else
     interrupts () ;
   #endif
@@ -713,10 +721,10 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 bool ACAN2517::isr_core (void) {
   bool handled = false ;
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       const uint32_t intReg = readRegisterSPI (C1INT_REGISTER) ; // DS20005688B, page 34
       if ((intReg & (1 << 1)) != 0) { // Receive FIFO interrupt
         receiveInterrupt () ;
@@ -735,10 +743,10 @@ bool ACAN2517::isr_core (void) {
       if ((intReg & (1 << 12)) != 0) { // SERRIF interrupt
         writeByteRegisterSPI (C1INT_REGISTER + 1, 1 << 4) ;
       }
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
   return handled ;
 }
 
@@ -925,90 +933,90 @@ uint8_t ACAN2517::readByteRegisterSPI (const uint16_t inRegisterAddress) {
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::writeByteRegister (const uint16_t inRegisterAddress, const uint8_t inValue) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       writeByteRegisterSPI (inRegisterAddress, inValue) ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint8_t ACAN2517::readByteRegister (const uint16_t inRegisterAddress) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       const uint8_t result = readByteRegisterSPI (inRegisterAddress) ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::writeRegister (const uint16_t inRegisterAddress, const uint32_t inValue) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       writeRegisterSPI (inRegisterAddress, inValue) ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint32_t ACAN2517::readRegister (const uint16_t inRegisterAddress) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       const uint32_t result = readRegisterSPI (inRegisterAddress) ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint32_t ACAN2517::readErrorCounters (void) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ;
       const uint32_t result = readRegisterSPI (C1BDIAG0_REGISTER) ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::reset2517FD (void) {
-  mSPI.beginTransaction (mSPISettings) ; // Check RESET is performed with 1 MHz clock
     #ifdef ARDUINO_ARCH_ESP32
       taskDISABLE_INTERRUPTS () ;
     #endif
+  mSPI.beginTransaction (mSPISettings) ; // Check RESET is performed with 1 MHz clock
       assertCS () ;
         mSPI.transfer16 (0x00) ; // Reset instruction: 0x0000
       deassertCS () ;
+  mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
