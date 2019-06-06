@@ -441,7 +441,7 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
     #endif
     if (mINT != 255) { // 255 means interrupt is not used
       #ifdef ARDUINO_ARCH_ESP32
-        attachInterrupt (itPin, inInterruptServiceRoutine, ONLOW) ;
+        attachInterrupt (itPin, inInterruptServiceRoutine, ONLOW_WE) ;
       #else
         attachInterrupt (itPin, inInterruptServiceRoutine, LOW) ;
         mSPI.usingInterrupt (itPin) ; // usingInterrupt is not implemented in Arduino ESP32
@@ -654,7 +654,10 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
   void ACAN2517::poll (void) {
     static BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
     vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
-    portYIELD_FROM_ISR () ;
+    if (xHigherPriorityTaskWoken)
+    {
+      portYIELD_FROM_ISR () ;
+    }
   }
 #endif
 
@@ -679,7 +682,10 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
   void IRAM_ATTR ACAN2517::isr (void) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
     vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
-    portYIELD_FROM_ISR () ;
+    // if (xHigherPriorityTaskWoken)
+    // {
+    //   portYIELD_FROM_ISR () ;
+    // }
   }
 #endif
 
