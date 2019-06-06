@@ -44,7 +44,7 @@
   static void myESP32Task (void * pData) {
     ACAN2517 * canDriver = (ACAN2517 *) pData ;
     while (1) {
-      xSemaphoreTake (canDriver->mISRSemaphore, portMAX_DELAY) ;
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
       bool loop = true ;
       while (loop) {
         loop = canDriver->isr_core () ;
@@ -172,7 +172,7 @@ mControllerTxFIFOFull (false),
 mDriverReceiveBuffer (),
 mDriverTransmitBuffer ()
 #ifdef ARDUINO_ARCH_ESP32
-  , mISRSemaphore (xSemaphoreCreateCounting (10, 0))
+  , mSPIMutex (xSemaphoreCreateCounting (10, 0))
 #endif
 {
 }
@@ -437,11 +437,11 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
       }
     }
     #ifdef ARDUINO_ARCH_ESP32
-      xTaskCreate (myESP32Task, "ACAN2517Handler", 1024, this, 256, NULL) ;
+      xTaskCreatePinnedToCore (myESP32Task, "ACAN2517Handler", 1024, this, 256, &mISRTaskHandle, 1) ;
     #endif
     if (mINT != 255) { // 255 means interrupt is not used
       #ifdef ARDUINO_ARCH_ESP32
-        attachInterrupt (itPin, inInterruptServiceRoutine, FALLING) ;
+        attachInterrupt (itPin, inInterruptServiceRoutine, ONLOW) ;
       #else
         attachInterrupt (itPin, inInterruptServiceRoutine, LOW) ;
         mSPI.usingInterrupt (itPin) ; // usingInterrupt is not implemented in Arduino ESP32
@@ -652,7 +652,9 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 #ifdef ARDUINO_ARCH_ESP32
   void ACAN2517::poll (void) {
-    xSemaphoreGive (mISRSemaphore) ;
+    static BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
+    vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
+    portYIELD_FROM_ISR () ;
   }
 #endif
 
@@ -674,9 +676,9 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 //----------------------------------------------------------------------------------------------------------------------
 
 #ifdef ARDUINO_ARCH_ESP32
-  void ACAN2517::isr (void) {
+  void IRAM_ATTR ACAN2517::isr (void) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
-    xSemaphoreGiveFromISR (mISRSemaphore, &xHigherPriorityTaskWoken) ;
+    vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
     portYIELD_FROM_ISR () ;
   }
 #endif

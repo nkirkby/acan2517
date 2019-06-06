@@ -155,7 +155,8 @@ class ACAN2517 {
   private: void receiveInterrupt (void) ;
   private: void transmitInterrupt (void) ;
   #ifdef ARDUINO_ARCH_ESP32
-    public: SemaphoreHandle_t mISRSemaphore ;
+    public: SemaphoreHandle_t mSPIMutex ;
+    private: TaskHandle_t mISRTaskHandle ;
   #endif
 
 //······················································································································
