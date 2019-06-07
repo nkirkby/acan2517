@@ -471,20 +471,22 @@ bool ACAN2517::tryToSend (const CANMessage & inMessage) {
   #if (defined (__MK64FX512__) || defined (__MK66FX1M0__))
     noInterrupts () ;
   #endif
-    mSPI.beginTransaction (mSPISettings) ;
       #ifdef ARDUINO_ARCH_ESP32
+        xSemaphoreTake(mSPIMutex, portMAX_DELAY);
         taskDISABLE_INTERRUPTS () ;
       #endif
+      mSPI.beginTransaction (mSPISettings) ;
         bool result = false ;
         if (inMessage.idx == 0) {
           result = enterInTransmitBuffer (inMessage) ;
         }else if (inMessage.idx == 255) {
           result = sendViaTXQ (inMessage) ;
         }
+      mSPI.endTransaction () ;
       #ifdef ARDUINO_ARCH_ESP32
         taskENABLE_INTERRUPTS () ;
+        xSemaphoreGive(mSPIMutex);
       #endif
-    mSPI.endTransaction () ;
   #if (defined (__MK64FX512__) || defined (__MK66FX1M0__))
     interrupts () ;
   #endif
@@ -616,6 +618,7 @@ bool ACAN2517::available (void) {
 
 bool ACAN2517::receive (CANMessage & outMessage) {
   #ifdef ARDUINO_ARCH_ESP32
+    xSemaphoreTake(mSPIMutex, portMAX_DELAY);
     mSPI.beginTransaction (mSPISettings) ; // For ensuring mutual exclusion access
     taskDISABLE_INTERRUPTS () ;
   #else
@@ -628,6 +631,7 @@ bool ACAN2517::receive (CANMessage & outMessage) {
   #ifdef ARDUINO_ARCH_ESP32
     taskENABLE_INTERRUPTS () ;
     mSPI.endTransaction () ;
+    xSemaphoreGive(mSPIMutex);
   #else
     interrupts () ;
   #endif
@@ -692,10 +696,10 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
   void IRAM_ATTR ACAN2517::isr (void) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
     vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
-    // if (xHigherPriorityTaskWoken)
-    // {
-    //   portYIELD_FROM_ISR () ;
-    // }
+    if (xHigherPriorityTaskWoken)
+    {
+      portYIELD_FROM_ISR () ;
+    }
   }
 #endif
 
@@ -715,10 +719,11 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 
 bool ACAN2517::isr_core (void) {
   bool handled = false ;
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+      mSPI.beginTransaction (mSPISettings) ;
       const uint32_t intReg = readRegisterSPI (C1INT_REGISTER) ; // DS20005688B, page 34
       if ((intReg & (1 << 1)) != 0) { // Receive FIFO interrupt
         receiveInterrupt () ;
@@ -737,10 +742,11 @@ bool ACAN2517::isr_core (void) {
       if ((intReg & (1 << 12)) != 0) { // SERRIF interrupt
         writeByteRegisterSPI (C1INT_REGISTER + 1, 1 << 4) ;
       }
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
   return handled ;
 }
 
@@ -927,90 +933,102 @@ uint8_t ACAN2517::readByteRegisterSPI (const uint16_t inRegisterAddress) {
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::writeByteRegister (const uint16_t inRegisterAddress, const uint8_t inValue) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ;
       writeByteRegisterSPI (inRegisterAddress, inValue) ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint8_t ACAN2517::readByteRegister (const uint16_t inRegisterAddress) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ;
       const uint8_t result = readByteRegisterSPI (inRegisterAddress) ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::writeRegister (const uint16_t inRegisterAddress, const uint32_t inValue) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ;
       writeRegisterSPI (inRegisterAddress, inValue) ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint32_t ACAN2517::readRegister (const uint16_t inRegisterAddress) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ;
       const uint32_t result = readRegisterSPI (inRegisterAddress) ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 uint32_t ACAN2517::readErrorCounters (void) {
-  mSPI.beginTransaction (mSPISettings) ;
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ;
       const uint32_t result = readRegisterSPI (C1BDIAG0_REGISTER) ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
   return result ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 
 void ACAN2517::reset2517FD (void) {
-  mSPI.beginTransaction (mSPISettings) ; // Check RESET is performed with 1 MHz clock
     #ifdef ARDUINO_ARCH_ESP32
+      xSemaphoreTake(mSPIMutex, portMAX_DELAY);
       taskDISABLE_INTERRUPTS () ;
     #endif
+    mSPI.beginTransaction (mSPISettings) ; // Check RESET is performed with 1 MHz clock
       assertCS () ;
         mSPI.transfer16 (0x00) ; // Reset instruction: 0x0000
       deassertCS () ;
+    mSPI.endTransaction () ;
     #ifdef ARDUINO_ARCH_ESP32
       taskENABLE_INTERRUPTS () ;
+      xSemaphoreGive(mSPIMutex);
     #endif
-  mSPI.endTransaction () ;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
