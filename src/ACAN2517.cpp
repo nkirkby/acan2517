@@ -44,11 +44,17 @@
   static void myESP32Task (void * pData) {
     ACAN2517 * canDriver = (ACAN2517 *) pData ;
     while (1) {
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-      bool loop = true ;
-      while (loop) {
-        loop = canDriver->isr_core () ;
-	    }
+      // In rare case, the ISR misses a falling edge and the driver gets stuck
+      // with the interrupt pin low, never triggering.
+      // For that reason, we're checking the state of that pin every 10ms here
+      if (xTaskNotifyWait(0, ULONG_MAX, NULL, pdMS_TO_TICKS(10)) || 
+          (LOW == digitalRead(canDriver->mINT)))
+      {
+        bool loop = true ;
+        while (loop) {
+          loop = canDriver->isr_core () ;
+        }
+      }
     }
   }
 #endif
@@ -172,7 +178,7 @@ mControllerTxFIFOFull (false),
 mDriverReceiveBuffer (),
 mDriverTransmitBuffer ()
 #ifdef ARDUINO_ARCH_ESP32
-  , mSPIMutex (xSemaphoreCreateCounting (10, 0))
+  , mSPIMutex (xSemaphoreCreateMutex())
 #endif
 {
 }
@@ -249,6 +255,7 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
   if (inFilters.filterStatus () != ACAN2517Filters::kFiltersOk) {
     errorCode |= kFilterDefinitionError ;
   }
+  
 //----------------------------------- CS and INT pins
   if (errorCode == 0) {
     if (mINT != 255) { // 255 means interrupt is not used
@@ -441,12 +448,15 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
     #endif
     if (mINT != 255) { // 255 means interrupt is not used
       #ifdef ARDUINO_ARCH_ESP32
-        attachInterrupt (itPin, inInterruptServiceRoutine, ONLOW_WE) ;
+        attachInterrupt (itPin, inInterruptServiceRoutine, FALLING) ;  // Don't know what the difference is between ONLOW_WE and ONLOW.
       #else
         attachInterrupt (itPin, inInterruptServiceRoutine, LOW) ;
         mSPI.usingInterrupt (itPin) ; // usingInterrupt is not implemented in Arduino ESP32
       #endif
     }
+  #ifdef ARDUINO_ARCH_ESP32
+  xSemaphoreGive(mSPIMutex); // Mutexes are initialized as taken, so the mutex must be given before it can be taken
+  #endif
   }
 //---
   return errorCode ;

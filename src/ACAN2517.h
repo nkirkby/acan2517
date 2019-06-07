@@ -92,7 +92,7 @@ class ACAN2517 {
   private: SPISettings mSPISettings ;
   private: SPIClass & mSPI ;
   private: uint8_t mCS ;
-  private: uint8_t mINT ;
+  public: uint8_t mINT ;
   private: bool mUsesTXQ ;
   private: bool mControllerTxFIFOFull ;
 
