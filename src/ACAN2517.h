@@ -77,7 +77,7 @@ class ACAN2517 {
   public: bool dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatchCallBack = NULL) ;
 
 //--- Call back function array
-  private: ACANCallBackRoutine * mCallBackFunctionArray = NULL ;
+  public: ACANCallBackRoutine * mCallBackFunctionArray = NULL ;
 
 //······················································································································
 //    Get error counters
@@ -92,7 +92,7 @@ class ACAN2517 {
   private: SPISettings mSPISettings ;
   private: SPIClass & mSPI ;
   private: uint8_t mCS ;
-  private: uint8_t mINT ;
+  public: uint8_t mINT ;
   private: bool mUsesTXQ ;
   private: bool mControllerTxFIFOFull ;
 
@@ -166,6 +166,15 @@ class ACAN2517 {
   private: ACAN2517 & operator = (const ACAN2517 &) ;
 
 //······················································································································
+
+  public: TaskHandle_t mISRTaskHandle;
+  public: uint32_t error_status;
+
+  public: void dump_diagnostics();
+  public: void print_diagnostics();
+
+  public: int diagnostic_buffer[10];
+  public: int has_dumped;
 
 } ;
 
