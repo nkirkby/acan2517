@@ -443,7 +443,7 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
       }
     }
     #ifdef ARDUINO_ARCH_ESP32
-      xTaskCreatePinnedToCore (myESP32Task, "ACAN2517Handler", 1024, this, 256, &mISRTaskHandle, 1) ;
+      xTaskCreatePinnedToCore (myESP32Task, "ACAN2517Handler", 1024, this, 23, &mISRTaskHandle, 1) ;
     #endif
     if (mINT != 255) { // 255 means interrupt is not used
       #ifdef ARDUINO_ARCH_ESP32
@@ -685,7 +685,7 @@ bool ACAN2517::dispatchReceivedMessage (const tFilterMatchCallBack inFilterMatch
 //----------------------------------------------------------------------------------------------------------------------
 
 #ifdef ARDUINO_ARCH_ESP32
-  void ACAN2517::isr (void) {
+  void IRAM_ATTR ACAN2517::isr (void) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE ;
     vTaskNotifyGiveFromISR(mISRTaskHandle, &xHigherPriorityTaskWoken) ;
     portYIELD_FROM_ISR () ;
