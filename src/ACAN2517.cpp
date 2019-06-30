@@ -333,7 +333,7 @@ uint32_t ACAN2517::begin (const ACAN2517Settings & inSettings,
     }
   }
 //----------------------------------- Set full speed clock
-  mSPISettings = SPISettings (inSettings.sysClock () / 2, MSBFIRST, SPI_MODE0) ;
+  mSPISettings = SPISettings (inSettings.sysClock () / 4, MSBFIRST, SPI_MODE0) ;
 //----------------------------------- Checking SPI connection is on (with a full speed clock)
 //    We write and the read back 2517 RAM at address 0x400
   for (uint32_t i=1 ; (i != 0) && (errorCode == 0) ; i <<= 1) {
